@@ -49,6 +49,9 @@ button.primary{background:var(--accent);border-color:var(--accent);color:var(--a
 .controls>*{flex:1}
 button:focus-visible,label.button:focus-within,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 button:disabled{opacity:.5;cursor:default}
+.camopts{display:flex;gap:.5rem;margin-top:.5rem}
+.camopts[hidden],.camopts [hidden]{display:none}
+.camopts select{flex:1;min-width:0;font:inherit;font-size:1rem;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:.3rem .5rem;min-height:36px}
 button.small{min-height:36px;padding:.3rem .75rem;font-size:.875rem}
 button.danger{color:var(--danger)}
 .viewfinder.hit{box-shadow:0 0 0 4px var(--accent)}
@@ -94,6 +97,10 @@ textarea{font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;resize:verti
     <button type="button" class="primary" id="camera">Start camera</button>
     <label class="button" for="file">Scan a photo</label>
     <input type="file" id="file" class="sr-file" accept="image/*" capture="environment">
+  </div>
+  <div class="camopts" id="camopts" hidden>
+    <select id="cam-select" aria-label="Camera"></select>
+    <button type="button" class="small" id="zoom" hidden>Zoom 2×</button>
   </div>
   <p class="status" id="status" role="status" aria-live="polite"></p>
 
@@ -355,7 +362,7 @@ textarea{font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;resize:verti
   // ---- Scanning ----
 
   var hasZXing = typeof window.ZXing !== "undefined";
-  var reader = null, live = false, lastCode = "", lastTime = 0;
+  var lastCode = "", lastTime = 0;
 
   function makeReader() {
     var hints = new Map();
@@ -378,33 +385,171 @@ textarea{font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;resize:verti
     return addIsbn(text);
   }
 
+  // Live scanning runs its own frame loop rather than ZXing's video helper. That helper sizes its
+  // capture canvas from the first frame and never updates it (iOS often changes the stream's
+  // size/orientation after it starts), feeds the whole frame to the decoder, and silently stops
+  // looping on any unexpected error. Here every frame is measured afresh, only the part of the
+  // picture shown in the viewfinder is decoded, and errors never end the loop.
+  var CAMERA_KEY = "shelfscan.camera.v1", ZOOM_KEY = "shelfscan.zoom.v1";
+  var stream = null, track = null, loopTimer = 0, frameNo = 0, decoder = null;
+  var frameCanvas = document.createElement("canvas");
+  var frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
+  var camOpts = $("camopts"), camSelect = $("cam-select"), zoomBtn = $("zoom");
+  var zoomSteps = [], zoomIndex = 0;
+
+  function pref(key, value) {
+    try {
+      if (arguments.length > 1) localStorage.setItem(key, value);
+      else return localStorage.getItem(key);
+    } catch (e) { return null; }
+  }
+
+  function makeDecoder() {
+    var hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    var d = new ZXing.MultiFormatReader();
+    d.setHints(hints);
+    return d;
+  }
+
+  // Copies part of the current video frame (in video pixels) to the canvas, scaled so its
+  // longer side is at most maxSide, and tries to decode it.
+  function decodeRegion(sx, sy, sw, sh, maxSide) {
+    var scale = Math.min(1, maxSide / Math.max(sw, sh));
+    var w = Math.max(1, Math.round(sw * scale)), h = Math.max(1, Math.round(sh * scale));
+    if (frameCanvas.width !== w || frameCanvas.height !== h) { frameCanvas.width = w; frameCanvas.height = h; }
+    frameCtx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+    var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(frameCanvas)));
+    return decoder.decodeWithState(bitmap);
+  }
+
+  function scanFrame() {
+    var vw = video.videoWidth, vh = video.videoHeight;
+    var cw = video.clientWidth, ch = video.clientHeight;
+    if (!vw || !vh || !cw || !ch || video.readyState < 2) return null;
+    // The video is shown with object-fit: cover, so work out which part of it is visible.
+    var s = Math.max(cw / vw, ch / vh);
+    var visW = cw / s, visH = ch / s, visX = (vw - visW) / 2, visY = (vh - visH) / 2;
+    if (frameNo++ % 3 === 2) {
+      // Every third frame, look at the whole visible picture in case the barcode isn't on the line.
+      return decodeRegion(visX, visY, visW, visH, 1280);
+    }
+    // Otherwise a band around the red line, at full resolution: thin bars need every pixel.
+    var bandH = visH * 0.4;
+    return decodeRegion(visX + visW * 0.05, vh / 2 - bandH / 2, visW * 0.9, bandH, 1920);
+  }
+
+  function tick() {
+    loopTimer = 0;
+    if (!stream) return;
+    try {
+      var result = scanFrame();
+      if (result) {
+        var text = result.getText(), now = Date.now();
+        // A barcode stays in view for many frames; only act once per sighting.
+        if (text !== lastCode || now - lastTime > 3000) onCode(text);
+        lastCode = text; lastTime = now;
+      }
+    } catch (e) {
+      // NotFound/Checksum/Format just mean "no barcode in this frame". Anything else is logged, never fatal.
+      if (!(e instanceof ZXing.NotFoundException || e instanceof ZXing.ChecksumException || e instanceof ZXing.FormatException)) {
+        console.warn("Frame decode failed", e);
+      }
+    }
+    loopTimer = setTimeout(tick, 80);
+  }
+
+  function setupZoom() {
+    var caps = track && track.getCapabilities ? track.getCapabilities() : {};
+    zoomSteps = [];
+    if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+      [1, 1.5, 2, 3].forEach(function (z) {
+        if (z >= caps.zoom.min && z <= caps.zoom.max) zoomSteps.push(z);
+      });
+    }
+    zoomBtn.hidden = zoomSteps.length < 2;
+    if (zoomBtn.hidden) return;
+    // Zooming in lets you hold the book far enough away for the lens to focus, while the bars stay big.
+    var saved = parseFloat(pref(ZOOM_KEY));
+    zoomIndex = zoomSteps.indexOf(saved);
+    if (zoomIndex === -1) zoomIndex = Math.max(0, zoomSteps.indexOf(2));
+    applyZoom();
+  }
+
+  function applyZoom() {
+    var z = zoomSteps[zoomIndex];
+    zoomBtn.textContent = "Zoom " + z + "×";
+    track.applyConstraints({ advanced: [{ zoom: z }] }).catch(function () {});
+  }
+
+  zoomBtn.addEventListener("click", function () {
+    zoomIndex = (zoomIndex + 1) % zoomSteps.length;
+    pref(ZOOM_KEY, String(zoomSteps[zoomIndex]));
+    applyZoom();
+  });
+
+  function fillCameraList() {
+    navigator.mediaDevices.enumerateDevices().then(function (devices) {
+      var cams = devices.filter(function (d) { return d.kind === "videoinput"; });
+      var current = track && track.getSettings ? track.getSettings().deviceId : "";
+      camSelect.textContent = "";
+      cams.forEach(function (d, i) {
+        var opt = document.createElement("option");
+        opt.value = d.deviceId;
+        opt.textContent = d.label || "Camera " + (i + 1);
+        opt.selected = d.deviceId === current;
+        camSelect.appendChild(opt);
+      });
+      camSelect.hidden = cams.length < 2;
+      camOpts.hidden = camSelect.hidden && zoomBtn.hidden;
+    }).catch(function () {});
+  }
+
+  camSelect.addEventListener("change", function () {
+    pref(CAMERA_KEY, camSelect.value);
+    stopCamera(true);
+    startCamera();
+  });
+
   function startCamera() {
     if (!hasZXing) { setStatus("The barcode library didn't load. Check your connection and reload.", "err"); return; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setStatus("This browser can't use the camera here. Try “Scan a photo” or type the ISBN.", "err");
       return;
     }
-    reader = reader || makeReader();
+    decoder = decoder || makeDecoder();
     cameraBtn.disabled = true;
     setStatus("Starting camera…");
-    reader.decodeFromConstraints(
-      { audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
-      video,
-      function (result) {
-        if (!result) return;
-        var text = result.getText(), now = Date.now();
-        // The decoder fires on every frame the barcode is visible; only act once per sighting.
-        if (text === lastCode && now - lastTime < 3000) { lastTime = now; return; }
-        lastCode = text; lastTime = now;
-        onCode(text);
+    var size = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+    var savedId = pref(CAMERA_KEY);
+    var open = function (useSaved) {
+      var v = useSaved ? { deviceId: { exact: savedId } } : { facingMode: { ideal: "environment" } };
+      v.width = size.width; v.height = size.height;
+      return navigator.mediaDevices.getUserMedia({ audio: false, video: v });
+    };
+    (savedId ? open(true).catch(function () { return open(false); }) : open(false)).then(function (s) {
+      stream = s;
+      track = s.getVideoTracks()[0];
+      video.setAttribute("playsinline", "");
+      video.muted = true;
+      video.srcObject = s;
+      return video.play();
+    }).then(function () {
+      var caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (caps.focusMode && caps.focusMode.indexOf("continuous") !== -1) {
+        track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(function () {});
       }
-    ).then(function () {
-      live = true;
       viewfinder.classList.add("live");
       cameraBtn.textContent = "Stop camera";
       cameraBtn.disabled = false;
-      setStatus("Hold a barcode across the red line.");
-    }, function (err) {
+      setStatus("Hold the barcode across the red line, about 20–30 cm away so it's in focus.");
+      setupZoom();
+      fillCameraList();
+      frameNo = 0;
+      tick();
+    }).catch(function (err) {
+      stopCamera(true);
       cameraBtn.disabled = false;
       var denied = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
       setStatus(denied ? "Camera permission was denied. Allow it in your browser settings, or scan a photo instead."
@@ -412,15 +557,18 @@ textarea{font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;resize:verti
     });
   }
 
-  function stopCamera() {
-    if (reader) reader.reset();
-    live = false;
+  function stopCamera(keepStatus) {
+    if (loopTimer) { clearTimeout(loopTimer); loopTimer = 0; }
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    stream = null; track = null;
+    video.srcObject = null;
     viewfinder.classList.remove("live");
+    camOpts.hidden = true;
     cameraBtn.textContent = "Start camera";
-    setStatus("");
+    if (!keepStatus) setStatus("");
   }
 
-  cameraBtn.addEventListener("click", function () { live ? stopCamera() : startCamera(); });
+  cameraBtn.addEventListener("click", function () { stream ? stopCamera() : startCamera(); });
 
   // Downscale big phone photos before decoding: full-size frames are slow and no more readable.
   function scaledDataUrl(img, maxSide) {
@@ -437,7 +585,7 @@ textarea{font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;resize:verti
     fileInput.value = "";
     if (!file) return;
     if (!hasZXing) { setStatus("The barcode library didn't load. Check your connection and reload.", "err"); return; }
-    if (live) stopCamera();
+    if (stream) stopCamera();
     var url = URL.createObjectURL(file);
     shot.onload = function () {
       viewfinder.classList.add("shot");
