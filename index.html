@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shelf scan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=Source+Serif+4:ital,opsz,wght@1,8..60,400;1,8..60,600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EDEFF2; --surface:#FFFFFF; --ink:#18222F; --muted:#5B6675; --line:#CDD3DA;
+  --accent:#2C5282; --accent-ink:#FFFFFF; --warn:#8A5A00; --danger:#A23B3B; --laser:#E0403A;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F141B; --surface:#18202A; --ink:#E4E9EF; --muted:#93A0AF; --line:#2A3442;
+    --accent:#8DB4E2; --accent-ink:#0F141B; --warn:#E3B45C; --danger:#E58A8A; --laser:#FF5A52;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F141B; --surface:#18202A; --ink:#E4E9EF; --muted:#93A0AF; --line:#2A3442;
+  --accent:#8DB4E2; --accent-ink:#0F141B; --warn:#E3B45C; --danger:#E58A8A; --laser:#FF5A52;
+  color-scheme:dark;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:40rem;margin:0 auto;padding:1.25rem 1rem 3rem}
+h1{font-size:1.75rem;line-height:1.2;margin:.5rem 0 .25rem;font-weight:700;letter-spacing:-.01em}
+.lede{color:var(--muted);margin:0 0 1.25rem}
+.viewfinder{position:relative;aspect-ratio:4/3;background:#000;border-radius:12px;overflow:hidden}
+.viewfinder video{width:100%;height:100%;object-fit:cover;display:block}
+.guide{position:absolute;left:12%;right:12%;top:50%;height:2px;background:var(--laser);box-shadow:0 0 10px var(--laser)}
+.idle{position:absolute;inset:0;display:grid;place-items:center;color:#C9D1DA;text-align:center;padding:1.5rem}
+.viewfinder.live .idle,.viewfinder.shot .idle,.viewfinder:not(.live) .guide{display:none}
+.viewfinder img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;display:none}
+.viewfinder.shot:not(.live) img{display:block}
+.sr-file{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.controls{display:flex;gap:.5rem;margin-top:.75rem}
+label.button{display:inline-flex;align-items:center}
+button,label.button{font:inherit;font-weight:600;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:.55rem 1rem;min-height:44px;cursor:pointer;justify-content:center}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.controls>*{flex:1}
+button:focus-visible,label.button:focus-within,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button:disabled{opacity:.5;cursor:default}
+button.small{min-height:36px;padding:.3rem .75rem;font-size:.875rem}
+button.danger{color:var(--danger)}
+.viewfinder.hit{box-shadow:0 0 0 4px var(--accent)}
+.status{min-height:1.5em;margin:.75rem 0 0;color:var(--muted);font-size:.9375rem}
+.status.warn{color:var(--warn)}
+.status.err{color:var(--danger)}
+.manual{margin-top:1rem}
+.manual label{display:block;font-weight:600;font-size:.875rem;margin-bottom:.25rem}
+.row{display:flex;gap:.5rem}
+.row input{flex:1;min-width:0}
+input,textarea{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:.5rem .65rem;min-height:44px;width:100%}
+section{margin-top:2rem}
+.head{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin-bottom:.5rem}
+h2{font-size:1.125rem;margin:0}
+h2 .count{color:var(--muted);font-weight:500}
+ol.books{list-style:none;margin:0;padding:0;display:grid;gap:.75rem}
+.book{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:.75rem}
+.book .top{display:flex;align-items:baseline;justify-content:space-between;gap:.5rem;margin-bottom:.5rem}
+.book .isbn{font-variant-numeric:tabular-nums;font-weight:600}
+.book .state{font-family:"Source Serif 4",Georgia,serif;font-style:italic;color:var(--muted);font-size:.9375rem}
+.book .state.warn{color:var(--warn)}
+.book .fields{display:grid;gap:.5rem;grid-template-columns:1fr 1fr}
+.book .fields label{display:block;font-size:.75rem;color:var(--muted);font-weight:500}
+.book .fields .wide{grid-column:1/-1}
+.book .fields input{min-height:40px;padding:.35rem .55rem;font-size:1rem;margin-top:.15rem}
+.book .actions{display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem}
+.empty{color:var(--muted);margin:0}
+textarea{font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical;min-height:8rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>Shelf scan</h1>
+  <p class="lede">Point the camera at the barcode on the back of a book. Each ISBN is looked up and added to the list, ready to copy as a markdown table.</p>
+
+  <div class="viewfinder" id="viewfinder">
+    <video id="video" playsinline muted autoplay></video>
+    <img id="shot" alt="Photo being scanned">
+    <div class="guide" aria-hidden="true"></div>
+    <div class="idle"><p>Camera is off.<br>Start it, or take a photo of a barcode.</p></div>
+  </div>
+  <div class="controls">
+    <button type="button" class="primary" id="camera">Start camera</button>
+    <label class="button" for="file">Scan a photo</label>
+    <input type="file" id="file" class="sr-file" accept="image/*" capture="environment">
+  </div>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+
+  <form class="manual" id="manual" autocomplete="off">
+    <label for="isbn-input">Or type an ISBN-13 or ISBN-10</label>
+    <div class="row">
+      <input id="isbn-input" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="978…">
+      <button type="submit">Add</button>
+    </div>
+  </form>
+
+  <section aria-labelledby="books-h">
+    <div class="head">
+      <h2 id="books-h">Books <span class="count" id="count"></span></h2>
+      <button type="button" class="small danger" id="clear">Clear all</button>
+    </div>
+    <p class="empty" id="empty">Nothing scanned yet.</p>
+    <ol class="books" id="books"></ol>
+  </section>
+
+  <section aria-labelledby="md-h">
+    <div class="head">
+      <h2 id="md-h">Markdown</h2>
+      <button type="button" class="small" id="copy">Copy</button>
+    </div>
+    <textarea id="markdown" readonly rows="8" wrap="off" aria-labelledby="md-h"></textarea>
+  </section>
+</main>
+
+<template id="book-tpl">
+  <li class="book">
+    <div class="top"><span class="isbn"></span><span class="state"></span></div>
+    <div class="fields">
+      <div class="wide"><label>Title<input data-field="title"></label></div>
+      <div><label>Author<input data-field="author"></label></div>
+      <div><label>Published<input data-field="published"></label></div>
+    </div>
+    <div class="actions">
+      <button type="button" class="small" data-act="retry">Look up again</button>
+      <button type="button" class="small danger" data-act="remove">Remove</button>
+    </div>
+  </li>
+</template>
+
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var STORE_KEY = "shelfscan.books.v1";
+  var $ = function (id) { return document.getElementById(id); };
+  var viewfinder = $("viewfinder"), video = $("video"), shot = $("shot");
+  var cameraBtn = $("camera"), fileInput = $("file"), statusEl = $("status");
+  var listEl = $("books"), emptyEl = $("empty"), countEl = $("count"), mdEl = $("markdown");
+  var tpl = $("book-tpl");
+
+  // ---- ISBN handling ----
+
+  function eanCheckDigit(first12) {
+    var sum = 0;
+    for (var i = 0; i < 12; i++) sum += (+first12[i]) * (i % 2 ? 3 : 1);
+    return String((10 - sum % 10) % 10);
+  }
+
+  function validEan13(s) {
+    return /^\d{13}$/.test(s) && eanCheckDigit(s) === s[12];
+  }
+
+  function isBookland(s) {
+    return validEan13(s) && (s.slice(0, 3) === "978" || s.slice(0, 3) === "979");
+  }
+
+  function validIsbn10(s) {
+    if (!/^\d{9}[\dX]$/.test(s)) return false;
+    var sum = 0;
+    for (var i = 0; i < 10; i++) sum += (10 - i) * (s[i] === "X" ? 10 : +s[i]);
+    return sum % 11 === 0;
+  }
+
+  // Returns an ISBN-13 string, or an error message as {error}.
+  function parseIsbn(raw) {
+    var s = String(raw).toUpperCase().replace(/[^0-9X]/g, "");
+    if (s.length === 13) {
+      if (!validEan13(s)) return { error: "That ISBN-13's check digit doesn't match." };
+      if (!isBookland(s)) return { error: "That's not an ISBN: book barcodes start with 978 or 979." };
+      return { isbn: s };
+    }
+    if (s.length === 10) {
+      if (!validIsbn10(s)) return { error: "That ISBN-10's check digit doesn't match." };
+      var core = "978" + s.slice(0, 9);
+      return { isbn: core + eanCheckDigit(core) };
+    }
+    return { error: "An ISBN has 10 or 13 digits." };
+  }
+
+  // ---- State ----
+
+  var books = load();
+
+  function load() {
+    try {
+      var data = JSON.parse(localStorage.getItem(STORE_KEY) || "[]");
+      return Array.isArray(data) ? data.filter(function (b) { return b && b.isbn; }) : [];
+    } catch (e) { return []; }
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(books.map(function (b) {
+        return { isbn: b.isbn, title: b.title || "", author: b.author || "", published: b.published || "", state: b.state === "loading" ? "pending" : b.state };
+      })));
+    } catch (e) { /* storage unavailable: the list just won't persist */ }
+  }
+
+  function find(isbn) {
+    for (var i = 0; i < books.length; i++) if (books[i].isbn === isbn) return books[i];
+    return null;
+  }
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg;
+    statusEl.className = "status" + (kind ? " " + kind : "");
+  }
+
+  function addIsbn(isbn) {
+    var existing = find(isbn);
+    if (existing) {
+      setStatus("Already in the list: " + (existing.title || isbn), "warn");
+      return false;
+    }
+    var book = { isbn: isbn, title: "", author: "", published: "", state: "loading" };
+    books.push(book);
+    save();
+    render();
+    setStatus("Added " + isbn + ", looking it up…");
+    lookup(book);
+    return true;
+  }
+
+  // ---- Metadata lookup ----
+
+  function fetchJson(url) {
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    });
+  }
+
+  function fromOpenLibrary(isbn) {
+    var key = "ISBN:" + isbn;
+    return fetchJson("https://openlibrary.org/api/books?bibkeys=" + key + "&format=json&jscmd=data")
+      .then(function (data) {
+        var d = data && data[key];
+        if (!d || !d.title) return null;
+        return {
+          title: d.subtitle ? d.title + ": " + d.subtitle : d.title,
+          author: (d.authors || []).map(function (a) { return a.name; }).join(", "),
+          published: d.publish_date || ""
+        };
+      });
+  }
+
+  function fromGoogleBooks(isbn) {
+    return fetchJson("https://www.googleapis.com/books/v1/volumes?q=isbn:" + isbn)
+      .then(function (data) {
+        var v = data && data.items && data.items[0] && data.items[0].volumeInfo;
+        if (!v || !v.title) return null;
+        return {
+          title: v.subtitle ? v.title + ": " + v.subtitle : v.title,
+          author: (v.authors || []).join(", "),
+          published: v.publishedDate || ""
+        };
+      });
+  }
+
+  function lookup(book) {
+    book.state = "loading";
+    renderBook(book);
+    fromOpenLibrary(book.isbn)
+      .catch(function () { return null; })
+      .then(function (meta) { return meta || fromGoogleBooks(book.isbn); })
+      .then(function (meta) {
+        if (!meta) {
+          book.state = "notfound";
+          if (statusEl.textContent.indexOf(book.isbn) !== -1) setStatus("No details found for " + book.isbn + ". You can fill them in.", "warn");
+        } else {
+          // Don't overwrite anything typed while the lookup was in flight.
+          ["title", "author", "published"].forEach(function (f) { if (!book[f]) book[f] = meta[f]; });
+          book.state = "found";
+          if (statusEl.textContent.indexOf(book.isbn) !== -1) setStatus("Added: " + book.title);
+        }
+      }, function () {
+        book.state = "error";
+        if (statusEl.textContent.indexOf(book.isbn) !== -1) setStatus("Couldn't reach the book databases for " + book.isbn + ".", "err");
+      })
+      .then(function () {
+        if (books.indexOf(book) === -1) return;
+        save();
+        renderBook(book);
+        renderMarkdown();
+      });
+  }
+
+  // ---- Rendering ----
+
+  var STATE_TEXT = { loading: "Looking up…", notfound: "Not found", error: "Lookup failed", pending: "Not looked up" };
+
+  function renderBook(book) {
+    var li = book.el;
+    if (!li) return;
+    li.querySelector(".isbn").textContent = book.isbn;
+    var state = li.querySelector(".state");
+    state.textContent = STATE_TEXT[book.state] || "";
+    state.className = "state" + (book.state === "notfound" || book.state === "error" ? " warn" : "");
+    li.querySelectorAll("input[data-field]").forEach(function (input) {
+      if (document.activeElement !== input) input.value = book[input.dataset.field] || "";
+    });
+    li.querySelector('[data-act="retry"]').disabled = book.state === "loading";
+  }
+
+  function render() {
+    listEl.textContent = "";
+    books.forEach(function (book) {
+      var li = tpl.content.firstElementChild.cloneNode(true);
+      book.el = li;
+      li.querySelectorAll("input[data-field]").forEach(function (input) {
+        input.addEventListener("input", function () {
+          book[input.dataset.field] = input.value;
+          save();
+          renderMarkdown();
+        });
+      });
+      li.querySelector('[data-act="retry"]').addEventListener("click", function () { lookup(book); });
+      li.querySelector('[data-act="remove"]').addEventListener("click", function () {
+        books.splice(books.indexOf(book), 1);
+        save();
+        render();
+      });
+      renderBook(book);
+      listEl.appendChild(li);
+    });
+    emptyEl.hidden = books.length > 0;
+    countEl.textContent = books.length ? "(" + books.length + ")" : "";
+    renderMarkdown();
+  }
+
+  function cell(s) {
+    return String(s || "").replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+  }
+
+  function renderMarkdown() {
+    var lines = ["| Title | Author | ISBN | Published |", "| --- | --- | --- | --- |"];
+    books.forEach(function (b) {
+      lines.push("| " + [cell(b.title), cell(b.author), b.isbn, cell(b.published)].join(" | ") + " |");
+    });
+    mdEl.value = books.length ? lines.join("\n") + "\n" : "";
+  }
+
+  // ---- Scanning ----
+
+  var hasZXing = typeof window.ZXing !== "undefined";
+  var reader = null, live = false, lastCode = "", lastTime = 0;
+
+  function makeReader() {
+    var hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+    return new ZXing.BrowserMultiFormatReader(hints, 200);
+  }
+
+  function flash() {
+    viewfinder.classList.add("hit");
+    setTimeout(function () { viewfinder.classList.remove("hit"); }, 300);
+  }
+
+  function onCode(text) {
+    if (!isBookland(text)) {
+      setStatus("Ignored barcode " + text + ": not a 978/979 ISBN.", "warn");
+      return false;
+    }
+    flash();
+    return addIsbn(text);
+  }
+
+  function startCamera() {
+    if (!hasZXing) { setStatus("The barcode library didn't load. Check your connection and reload.", "err"); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus("This browser can't use the camera here. Try “Scan a photo” or type the ISBN.", "err");
+      return;
+    }
+    reader = reader || makeReader();
+    cameraBtn.disabled = true;
+    setStatus("Starting camera…");
+    reader.decodeFromConstraints(
+      { audio: false, video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } } },
+      video,
+      function (result) {
+        if (!result) return;
+        var text = result.getText(), now = Date.now();
+        // The decoder fires on every frame the barcode is visible; only act once per sighting.
+        if (text === lastCode && now - lastTime < 3000) { lastTime = now; return; }
+        lastCode = text; lastTime = now;
+        onCode(text);
+      }
+    ).then(function () {
+      live = true;
+      viewfinder.classList.add("live");
+      cameraBtn.textContent = "Stop camera";
+      cameraBtn.disabled = false;
+      setStatus("Hold a barcode across the red line.");
+    }, function (err) {
+      cameraBtn.disabled = false;
+      var denied = err && (err.name === "NotAllowedError" || err.name === "SecurityError");
+      setStatus(denied ? "Camera permission was denied. Allow it in your browser settings, or scan a photo instead."
+                       : "Couldn't start the camera" + (err && err.message ? ": " + err.message : "") + ".", "err");
+    });
+  }
+
+  function stopCamera() {
+    if (reader) reader.reset();
+    live = false;
+    viewfinder.classList.remove("live");
+    cameraBtn.textContent = "Start camera";
+    setStatus("");
+  }
+
+  cameraBtn.addEventListener("click", function () { live ? stopCamera() : startCamera(); });
+
+  // Downscale big phone photos before decoding: full-size frames are slow and no more readable.
+  function scaledDataUrl(img, maxSide) {
+    var scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    var c = document.createElement("canvas");
+    c.width = Math.round(img.naturalWidth * scale);
+    c.height = Math.round(img.naturalHeight * scale);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.92);
+  }
+
+  fileInput.addEventListener("change", function () {
+    var file = fileInput.files && fileInput.files[0];
+    fileInput.value = "";
+    if (!file) return;
+    if (!hasZXing) { setStatus("The barcode library didn't load. Check your connection and reload.", "err"); return; }
+    if (live) stopCamera();
+    var url = URL.createObjectURL(file);
+    shot.onload = function () {
+      viewfinder.classList.add("shot");
+      setStatus("Reading barcode…");
+      var sizes = [1600, 1000, 2400], i = 0;
+      var imageReader = makeReader();
+      (function attempt() {
+        imageReader.decodeFromImageUrl(scaledDataUrl(shot, sizes[i])).then(function (result) {
+          onCode(result.getText());
+        }, function () {
+          if (++i < sizes.length) return attempt();
+          setStatus("No book barcode found in that photo. Try again closer, with the barcode level and in focus.", "warn");
+        });
+      })();
+    };
+    shot.onerror = function () { setStatus("Couldn't open that image.", "err"); };
+    if (shot.src && shot.src.indexOf("blob:") === 0) URL.revokeObjectURL(shot.src);
+    shot.src = url;
+  });
+
+  // ---- Manual entry, clear, copy ----
+
+  $("manual").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var input = $("isbn-input");
+    var parsed = parseIsbn(input.value);
+    if (parsed.error) { setStatus(parsed.error, "err"); return; }
+    if (addIsbn(parsed.isbn)) input.value = "";
+  });
+
+  $("clear").addEventListener("click", function () {
+    if (!books.length || !confirm("Remove all " + books.length + " books from the list?")) return;
+    books = [];
+    save();
+    render();
+    setStatus("List cleared.");
+  });
+
+  $("copy").addEventListener("click", function () {
+    if (!mdEl.value) { setStatus("Nothing to copy yet.", "warn"); return; }
+    var done = function () { setStatus("Markdown table copied."); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(mdEl.value).then(done, function () { mdEl.select(); document.execCommand("copy"); done(); });
+    } else {
+      mdEl.select(); document.execCommand("copy"); done();
+    }
+  });
+
+  render();
+  // Books saved mid-lookup (e.g. the page was closed) get looked up again.
+  books.forEach(function (b) { if (b.state === "pending" || b.state === "loading") lookup(b); });
+  if (!hasZXing) setStatus("The barcode library didn't load. You can still type ISBNs.", "warn");
+})();
+</script>
+</body>
+</html>
